@@ -290,11 +290,20 @@ import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers
 env.allowLocalModels  = false;
 env.allowRemoteModels = true;
 env.useBrowserCache   = true;
-// When served over HTTPS (Vercel), redirect model fetches to same domain
-// so corporate firewalls don't block HuggingFace CDN requests
+
+// Intercept HuggingFace model fetches and redirect to same-domain /models/
+// so corporate firewalls that block huggingface.co don't break transcription.
 if (location.protocol === 'https:') {
-  env.remoteHost = location.origin + '/models';
-  env.remotePathTemplate = '{model}/{file}';
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function(url, opts) {
+    if (typeof url === 'string') {
+      // huggingface.co/Xenova/whisper-tiny/resolve/main/config.json
+      //   → /models/Xenova/whisper-tiny/config.json
+      const m = url.match(/huggingface\.co\/(Xenova\/whisper-[^/]+)\/resolve\/[^/]+\/(.+)/);
+      if (m) url = `${location.origin}/models/${m[1]}/${m[2]}`;
+    }
+    return _fetch(url, opts);
+  };
 }
 
 // ── State ─────────────────────────────────────────────────────────────────
