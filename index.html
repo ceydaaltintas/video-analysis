@@ -355,7 +355,7 @@ function float32ToWav(samples, sampleRate = 16000) {
 }
 
 async function groqTranscribe(audioData, apiKey, language) {
-  const CHUNK = 10 * 60 * 16000; // 10 min @ 16kHz
+  const CHUNK = 2 * 60 * 16000; // 2 min @ 16kHz → ~3.8MB WAV, fits Vercel 4.5MB limit
   const chunks = [];
   for (let i = 0; i < audioData.length; i += CHUNK) chunks.push(audioData.slice(i, i + CHUNK));
 
@@ -368,12 +368,12 @@ async function groqTranscribe(audioData, apiKey, language) {
     form.append('response_format', 'text');
     if (language?.trim()) form.append('language', language.trim());
 
-    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    const res = await fetch('/api/transcribe', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}` },
+      headers: { 'x-groq-key': apiKey },
       body: form
     });
-    if (!res.ok) throw new Error(`Groq transkripsiyon hatası: ${res.status} — ${await res.text()}`);
+    if (!res.ok) throw new Error(`Transkripsiyon hatası: ${res.status} — ${await res.text()}`);
     parts.push((await res.text()).trim());
   }
   const text = parts.join('\n\n');
@@ -801,9 +801,9 @@ $('groq-key').addEventListener('input', checkAnalyzeReady);
 
 // ── Groq LLM Analysis ────────────────────────────────────────────────────
 async function groqGenerate(apiKey, heading, description, context) {
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const res = await fetch('/api/generate', {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { 'x-groq-key': apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       temperature: 0.4,
