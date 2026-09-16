@@ -2,5 +2,9 @@
   "functions": {
     "api/transcribe.js": { "maxDuration": 60 },
     "api/generate.js":   { "maxDuration": 30 }
-  }
+  },
+  "rewrites": [
+    { "source": "/process/audio", "destination": "/api/transcribe" },
+    { "source": "/process/doc",   "destination": "/api/generate" }
+  ]
 }

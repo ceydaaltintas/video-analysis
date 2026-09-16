@@ -368,7 +368,7 @@ async function groqTranscribe(audioData, apiKey, language) {
     form.append('response_format', 'text');
     if (language?.trim()) form.append('language', language.trim());
 
-    const res = await fetch('/api/transcribe', {
+    const res = await fetch('/process/audio', {
       method: 'POST',
       headers: { 'x-groq-key': apiKey },
       body: form
@@ -801,7 +801,7 @@ $('groq-key').addEventListener('input', checkAnalyzeReady);
 
 // ── Groq LLM Analysis ────────────────────────────────────────────────────
 async function groqGenerate(apiKey, heading, description, context) {
-  const res = await fetch('/api/generate', {
+  const res = await fetch('/process/doc', {
     method: 'POST',
     headers: { 'x-groq-key': apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({
