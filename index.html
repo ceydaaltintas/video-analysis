@@ -287,11 +287,9 @@ select:focus,input:focus{border-color:var(--accent);}
 
 <script type="module">
 import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
-// Use bundled local models (served from same Vercel domain — no HuggingFace CDN needed)
-env.localModelPath   = '/models/';
-env.allowLocalModels = true;
-env.allowRemoteModels = false;
-env.useBrowserCache  = true;
+env.allowLocalModels  = false;
+env.allowRemoteModels = true;
+env.useBrowserCache   = true;
 
 // ── State ─────────────────────────────────────────────────────────────────
 let transcriptText  = '';
@@ -379,8 +377,14 @@ let whisperPipeline = null, loadedModel = null;
 
 async function runWhisper(audioData, modelId, language) {
   if (!whisperPipeline || loadedModel !== modelId) {
-    setProg('bar-tr','msg-tr','pct-tr', 8, 'Whisper modeli yükleniyor (ilk seferinde CDN\'den indirilir)...');
-    whisperPipeline = await pipeline('automatic-speech-recognition', modelId, {
+    // Use local model from same domain (Vercel) to avoid corporate firewall blocking HuggingFace
+    const origin = window.location.origin;
+    const isServed = origin.startsWith('http');
+    const resolvedModel = (isServed && modelId === 'Xenova/whisper-tiny')
+      ? origin + '/models/' + modelId
+      : modelId;
+    setProg('bar-tr','msg-tr','pct-tr', 8, 'Whisper modeli yükleniyor...');
+    whisperPipeline = await pipeline('automatic-speech-recognition', resolvedModel, {
       quantized: true,
       progress_callback: info => {
         if (info.status === 'progress') {
@@ -389,7 +393,7 @@ async function runWhisper(audioData, modelId, language) {
         }
       }
     });
-    loadedModel = modelId;
+    loadedModel = resolvedModel;
   }
   setProg('bar-tr','msg-tr','pct-tr', 40, 'Transkripsiyon başlıyor...');
   const opts = { task:'transcribe', chunk_length_s:30, stride_length_s:5, return_timestamps:true,
