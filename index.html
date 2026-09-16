@@ -139,11 +139,9 @@ select:focus,input:focus{border-color:var(--accent);}
 
     <div id="audio-opts">
       <div class="row">
-        <div>
-          <label>Whisper Model</label>
-          <select id="wmodel">
-            <option value="Xenova/whisper-tiny" selected>Tiny — Hızlı ✓</option>
-          </select>
+        <div style="flex:2">
+          <label>Groq API Key <span style="font-size:11px;color:var(--muted)">— <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent)">console.groq.com/keys</a></span></label>
+          <input type="password" id="groq-key" placeholder="gsk_..." style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:9px 12px;color:var(--text);font-size:13px;font-family:monospace;" />
         </div>
         <div>
           <label>Dil (boş = otomatik)</label>
@@ -221,40 +219,12 @@ select:focus,input:focus{border-color:var(--accent);}
 
     <div class="sections" id="sections-list"></div>
 
-    <!-- LLM Model Seçimi -->
+    <!-- Groq API -->
     <div class="llm-card" id="llm-card">
-      <div class="llm-card-title">🤖 Analiz Modeli — tarayıcıda çalışır, kurulum gerektirmez</div>
-      <div class="alert a-info" style="display:flex; margin-bottom:4px;">
+      <div class="llm-card-title">⚡ Groq API ile Analiz</div>
+      <div class="alert a-info" style="display:flex;">
         <span>ℹ️</span>
-        <div>Model <strong>ilk kullanımda</strong> tarayıcıya indirilir ve cache'lenir. Sonraki kullanımlarda internet gerekmez. WebGPU gerektirir (Chrome 113+ / Edge 113+).</div>
-      </div>
-      <div class="model-opts">
-        <label class="model-opt selected" id="opt-qwen1">
-          <input type="radio" name="llm" value="Qwen2.5-1.5B-Instruct-q4f16_1-MLC" checked />
-          <div class="model-opt-info">
-            <div class="name">Qwen 2.5 · 1.5B</div>
-            <div class="meta">~900 MB · Hızlı · Türkçe desteği iyi ✓ Önerilen</div>
-          </div>
-        </label>
-        <label class="model-opt" id="opt-qwen3">
-          <input type="radio" name="llm" value="Qwen2.5-3B-Instruct-q4f32_1-MLC" />
-          <div class="model-opt-info">
-            <div class="name">Qwen 2.5 · 3B</div>
-            <div class="meta">~1.8 GB · Daha kaliteli çıktı</div>
-          </div>
-        </label>
-        <label class="model-opt" id="opt-llama">
-          <input type="radio" name="llm" value="Llama-3.2-3B-Instruct-q4f16_1-MLC" />
-          <div class="model-opt-info">
-            <div class="name">Llama 3.2 · 3B</div>
-            <div class="meta">~2 GB · Çok dilli güçlü model</div>
-          </div>
-        </label>
-      </div>
-
-      <div class="alert a-warn" id="webgpu-warn" style="display:none;">
-        <span>⚠️</span>
-        <div>Tarayıcınız WebGPU desteklemiyor. Chrome 113+ veya Edge 113+ kullanın. Alternatif: Ollama ile LLM kurun ve aşağıdan bağlanın.</div>
+        <div>Transkripsiyon ve doküman üretimi Groq API üzerinden yapılır. <strong>Ses verisi Groq sunucularına gönderilir</strong> — gizli videolar için dikkatli olun.</div>
       </div>
 
       <button class="btn btn-g" id="btn-analyze" disabled>⚡ Analiz Et ve Doküman İndir</button>
@@ -286,25 +256,6 @@ select:focus,input:focus{border-color:var(--accent);}
 </main>
 
 <script type="module">
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
-env.allowLocalModels  = false;
-env.allowRemoteModels = true;
-env.useBrowserCache   = true;
-
-// Intercept HuggingFace model fetches and redirect to same-domain /models/
-// so corporate firewalls that block huggingface.co don't break transcription.
-if (location.protocol === 'https:') {
-  const _fetch = window.fetch.bind(window);
-  window.fetch = function(url, opts) {
-    if (typeof url === 'string') {
-      // huggingface.co/Xenova/whisper-tiny/resolve/main/config.json
-      //   → /models/Xenova/whisper-tiny/config.json
-      const m = url.match(/huggingface\.co\/(Xenova\/whisper-[^/]+)\/resolve\/[^/]+\/(.+)/);
-      if (m) url = `${location.origin}/models/${m[1]}/${m[2]}`;
-    }
-    return _fetch(url, opts);
-  };
-}
 
 // ── State ─────────────────────────────────────────────────────────────────
 let transcriptText  = '';
@@ -387,32 +338,47 @@ async function extractAudio(file) {
   finally { ctx.close(); }
 }
 
-// ── Whisper ───────────────────────────────────────────────────────────────
-let whisperPipeline = null, loadedModel = null;
+// ── Groq Transcription ────────────────────────────────────────────────────
+function float32ToWav(samples, sampleRate = 16000) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0,'RIFF'); v.setUint32(4, 36 + samples.length*2, true);
+  str(8,'WAVE'); str(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sampleRate,true); v.setUint32(28,sampleRate*2,true);
+  v.setUint16(32,2,true); v.setUint16(34,16,true);
+  str(36,'data'); v.setUint32(40,samples.length*2,true);
+  for (let i = 0; i < samples.length; i++)
+    v.setInt16(44 + i*2, Math.max(-32768, Math.min(32767, samples[i]*32768)), true);
+  return new Blob([buf], { type: 'audio/wav' });
+}
 
-async function runWhisper(audioData, modelId, language) {
-  if (!whisperPipeline || loadedModel !== modelId) {
-    setProg('bar-tr','msg-tr','pct-tr', 8, 'Whisper modeli yükleniyor...');
-    whisperPipeline = await pipeline('automatic-speech-recognition', modelId, {
-      quantized: true,
-      progress_callback: info => {
-        if (info.status === 'progress') {
-          const p = Math.round(info.progress||0);
-          setProg('bar-tr','msg-tr','pct-tr', Math.min(8+p*.3,38), `Model indiriliyor: ${info.file||''} %${p}`);
-        }
-      }
+async function groqTranscribe(audioData, apiKey, language) {
+  const CHUNK = 10 * 60 * 16000; // 10 min @ 16kHz
+  const chunks = [];
+  for (let i = 0; i < audioData.length; i += CHUNK) chunks.push(audioData.slice(i, i + CHUNK));
+
+  const parts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    setProg('bar-tr','msg-tr','pct-tr', Math.round(10 + (i/chunks.length)*85), `Transkripsiyon: ${i+1}/${chunks.length} parça...`);
+    const form = new FormData();
+    form.append('file', float32ToWav(chunks[i]), 'audio.wav');
+    form.append('model', 'whisper-large-v3-turbo');
+    form.append('response_format', 'text');
+    if (language?.trim()) form.append('language', language.trim());
+
+    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      body: form
     });
-    loadedModel = modelId;
+    if (!res.ok) throw new Error(`Groq transkripsiyon hatası: ${res.status} — ${await res.text()}`);
+    parts.push((await res.text()).trim());
   }
-  setProg('bar-tr','msg-tr','pct-tr', 40, 'Transkripsiyon başlıyor...');
-  const opts = { task:'transcribe', chunk_length_s:30, stride_length_s:5, return_timestamps:true,
-    callback_function: () => { const v=parseInt($('pct-tr').textContent)||40; if(v<92) setProg('bar-tr','msg-tr','pct-tr',v+1,'Yazıya dökülüyor...'); }
-  };
-  if (language?.trim()) opts.language = language.trim();
-  const result = await whisperPipeline(audioData, opts);
-  const text = (typeof result.text==='string' ? result.text : (result.chunks||[]).map(c=>c.text).join('')).trim();
+  const text = parts.join('\n\n');
   if (!text) throw new Error('whisper_empty');
-  return { text, result };
+  return { text };
 }
 
 // ── Frame extraction ──────────────────────────────────────────────────────
@@ -570,13 +536,19 @@ $('btn-tr').addEventListener('click', async () => {
   setProg('bar-tr','msg-tr','pct-tr', 2, 'Başlıyor...');
 
   const mode     = currentMode;
-  const modelId  = $('wmodel').value;
   const language = $('wlang').value.trim();
   const interval = parseInt($('ocr-interval').value);
   const ocrLang  = $('ocr-lang').value;
+  const apiKey   = $('groq-key').value.trim();
+
+  if ((mode==='audio' || mode==='both') && !apiKey) {
+    showAlert('err-tr', '❌ Ses transkripsiyon için Groq API key gerekli. Adım 3\'teki alana girin.');
+    $('btn-tr').disabled = false;
+    return;
+  }
 
   try {
-    let finalText='', detectedLang=language||'?', duration=0;
+    let finalText='', detectedLang=language||'tr', duration=0;
 
     if (mode==='audio' || mode==='both') {
       setProg('bar-tr','msg-tr','pct-tr', 5, 'Ses kanalı okunuyor...');
@@ -586,14 +558,12 @@ $('btn-tr').addEventListener('click', async () => {
         setProg('bar-tr','msg-tr','pct-tr', 40, 'Ses bulunamadı — OCR moduna geçiliyor...');
       } else {
         try {
-          const { text, result } = await runWhisper(data, modelId, language);
+          const { text } = await groqTranscribe(data, apiKey, language);
           finalText = text;
-          detectedLang = result.language || language || '?';
-          const last = Array.isArray(result.chunks) ? result.chunks[result.chunks.length-1] : null;
-          duration = last?.timestamp?.[1] || 0;
+          detectedLang = language || 'tr';
         } catch(e) {
           if (e.message==='whisper_empty' && mode==='both') setProg('bar-tr','msg-tr','pct-tr',40,'Konuşma yok — OCR devam ediyor...');
-          else if (e.message==='whisper_empty') throw new Error('Konuşma sesi tespit edilemedi. Dil alanına "tr" girin, daha büyük model seçin ya da "Frame OCR" modunu deneyin.');
+          else if (e.message==='whisper_empty') throw new Error('Konuşma sesi tespit edilemedi. Dil alanına "tr" girin ya da "Frame OCR" modunu deneyin.');
           else throw e;
         }
       }
@@ -824,79 +794,63 @@ function renderSections(sections) {
 }
 
 function checkAnalyzeReady() {
-  $('btn-analyze').disabled = !(transcriptText && parsedSections.length>0);
+  const hasKey = !!$('groq-key').value.trim();
+  $('btn-analyze').disabled = !(transcriptText && parsedSections.length > 0 && hasKey);
 }
+$('groq-key').addEventListener('input', checkAnalyzeReady);
 
-// ── WebLLM Analysis ───────────────────────────────────────────────────────
-let llmEngine = null;
-let loadedLLM = null;
-
-$('btn-analyze').addEventListener('click', async () => {
-  if (!transcriptText || !parsedSections.length) return;
-  if (!navigator.gpu) { showAlert('err-llm','❌ Tarayıcınız WebGPU desteklemiyor. Chrome 113+ veya Edge 113+ kullanın.'); return; }
-
-  $('btn-analyze').disabled = true;
-  hideAlert('err-llm');
-  showProg('prog-llm');
-
-  const selectedModel = document.querySelector('input[name=llm]:checked').value;
-
-  try {
-    // ── 1. Model yükle ───────────────────────────────────────────
-    if (!llmEngine || loadedLLM !== selectedModel) {
-      setProg('bar-llm','msg-llm','pct-llm', 2, 'WebLLM modülü yükleniyor...');
-      const webllm = await import('https://esm.run/@mlc-ai/web-llm');
-
-      setProg('bar-llm','msg-llm','pct-llm', 5, `Model yükleniyor: ${selectedModel.split('-').slice(0,2).join(' ')} (ilk seferinde indirilir)...`);
-
-      llmEngine = await webllm.CreateMLCEngine(selectedModel, {
-        initProgressCallback: p => {
-          const pct = Math.round(5 + (p.progress||0) * 40);
-          setProg('bar-llm','msg-llm','pct-llm', Math.min(pct,44), p.text||'Model yükleniyor...');
-        }
-      });
-      loadedLLM = selectedModel;
-    }
-
-    // ── 2. Her bölüm için içerik üret ────────────────────────────
-    const total = parsedSections.length;
-    const contextSnippet = transcriptText.slice(0, 4000);
-
-    for (let i=0; i<total; i++) {
-      const section = parsedSections[i];
-      const pct = Math.round(45 + (i/total)*50);
-      setProg('bar-llm','msg-llm','pct-llm', pct, `"${section.heading}" üretiliyor… (${i+1}/${total})`);
-
-      const messages = [
+// ── Groq LLM Analysis ────────────────────────────────────────────────────
+async function groqGenerate(apiKey, heading, description, context) {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.4,
+      max_tokens: 500,
+      messages: [
         {
           role: 'system',
           content: [
             'Sen kıdemli bir Türk iş analisti ve teknik yazarsın.',
             'Görevin: verilen içeriği okuyup, belirtilen doküman başlığı altına girecek bölümü Türkçe olarak yazmak.',
-            'KURALLLAR:',
-            '1. SADECE düz Türkçe paragraflar yaz. Başka dil (İngilizce, Japonca vb.) KESİNLİKLE yasak.',
+            'KURALLAR:',
+            '1. SADECE düz Türkçe paragraflar yaz. Başka dil KESİNLİKLE yasak.',
             '2. Markdown kullanma: **, __, #, -, * gibi işaretler yasak. Sadece düz metin.',
-            '3. Başlığı veya yönerge metnini tekrarlama. Doğrudan içeriğe gir.',
-            '4. Aynı kelimeyi veya cümleyi arka arkaya ASLA tekrarlama.',
-            '5. 3-6 cümle yaz. Kısa, öz ve profesyonel.',
-            '6. İçerikte bu başlıkla ilgili bilgi yoksa "Bu konuya ilişkin sunumda yeterli bilgi yer almamaktadır." yaz.',
+            '3. Başlığı tekrarlama. Doğrudan içeriğe gir.',
+            '4. 3-6 cümle yaz. Kısa, öz ve profesyonel.',
+            '5. İçerikte bu başlıkla ilgili bilgi yoksa sadece şunu yaz: "Bu konuya ilişkin sunumda yeterli bilgi yer almamaktadır."',
           ].join('\n')
         },
         {
           role: 'user',
-          content: `Kaynak içerik:\n"""\n${contextSnippet}\n"""\n\nYukarıdaki içeriğe dayanarak "${section.heading}" başlığı için doküman bölümünü yaz.${section.description ? `\nBu bölümde şunlar bekleniyor: ${section.description}` : ''}`
+          content: `Kaynak içerik:\n"""\n${context}\n"""\n\n"${heading}" başlığı için doküman bölümünü yaz.${description ? `\nBeklenen: ${description}` : ''}`
         }
-      ];
+      ]
+    })
+  });
+  if (!res.ok) throw new Error(`Groq LLM hatası: ${res.status} — ${await res.text()}`);
+  const data = await res.json();
+  return cleanLLMOutput(data.choices[0].message.content.trim());
+}
 
-      const reply = await llmEngine.chat.completions.create({
-        messages,
-        stream: false,
-        temperature: 0.4,
-        max_tokens: 400,
-        repetition_penalty: 1.35,
-      });
-      const raw = reply.choices[0].message.content.trim();
-      parsedSections[i].content = cleanLLMOutput(raw);
+$('btn-analyze').addEventListener('click', async () => {
+  if (!transcriptText || !parsedSections.length) return;
+  const apiKey = $('groq-key').value.trim();
+  if (!apiKey) { showAlert('err-llm','❌ Groq API key girilmedi.'); return; }
+
+  $('btn-analyze').disabled = true;
+  hideAlert('err-llm');
+  showProg('prog-llm');
+
+  try {
+    const total = parsedSections.length;
+    const context = transcriptText.slice(0, 6000);
+
+    for (let i = 0; i < total; i++) {
+      const section = parsedSections[i];
+      setProg('bar-llm','msg-llm','pct-llm', Math.round(5 + (i/total)*90), `"${section.heading}" üretiliyor… (${i+1}/${total})`);
+      parsedSections[i].content = await groqGenerate(apiKey, section.heading, section.description, context);
     }
 
     // ── 3. Dokümanı oluştur ve indir ─────────────────────────────
